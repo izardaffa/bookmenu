@@ -103,9 +103,6 @@ export default async function DashboardBillingPage(
     };
   });
 
-  const midtransClientKey = process.env.MIDTRANS_CLIENT_KEY || "";
-  const midtransSnapUrl = process.env.MIDTRANS_SNAP_URL || "https://app.sandbox.midtrans.com/snap/snap.js";
-
   return (
     <BillingPanel
       initialBusinessName={restaurant.restaurant_name}
@@ -113,8 +110,6 @@ export default async function DashboardBillingPage(
       activePlan={activePlan}
       endedAt={endedAt}
       transactions={transactions}
-      midtransClientKey={midtransClientKey}
-      midtransSnapUrl={midtransSnapUrl}
     />
   );
 }

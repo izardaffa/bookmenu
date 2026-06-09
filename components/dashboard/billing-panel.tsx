@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Script from "next/script";
 import {
   AlertCircle,
   Check,
@@ -35,8 +34,6 @@ type BillingPanelProps = {
   activePlan: "free" | "monthly" | "yearly";
   endedAt: string | null;
   transactions: Transaction[];
-  midtransClientKey: string;
-  midtransSnapUrl: string;
 };
 
 type PlanType = "free" | "monthly" | "yearly";
@@ -47,12 +44,19 @@ export default function BillingPanel({
   activePlan,
   endedAt,
   transactions,
-  midtransClientKey,
-  midtransSnapUrl,
 }: BillingPanelProps) {
   const [selectedPlan, setSelectedPlan] = useState<PlanType>(activePlan);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showQrisModal, setShowQrisModal] = useState(false);
+  const [qrisData, setQrisData] = useState<{
+    qr_url: string;
+    qr_content: string;
+    history_id: string;
+    order_id: string;
+    amount: number;
+  } | null>(null);
+  const [checkingPayment, setCheckingPayment] = useState(false);
 
   const totalMenusCount = initialMenus.length;
 
@@ -98,7 +102,7 @@ export default function BillingPanel({
     setNotice(null);
 
     try {
-      const res = await fetch("/api/midtrans/token", {
+      const res = await fetch("/api/qrisly/token", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -108,40 +112,42 @@ export default function BillingPanel({
 
       if (!res.ok) {
         const errData = await res.json();
-        throw new Error(errData.error || "Failed to generate payment token");
+        throw new Error(errData.error || "Failed to generate QRIS payment");
       }
 
       const data = await res.json();
-      const token = data.token;
-
-      if (typeof window !== "undefined" && (window as any).snap) {
-        (window as any).snap.pay(token, {
-          onSuccess: function (result: any) {
-            setNotice("Payment successful! Your active subscription will be updated shortly.");
-            setTimeout(() => {
-              window.location.reload();
-            }, 2000);
-          },
-          onPending: function (result: any) {
-            setNotice("Payment pending. Please complete payment inside your payment app.");
-          },
-          onError: function (result: any) {
-            setNotice("Payment failed. Please try again.");
-          },
-          onClose: function () {
-            setNotice("Payment window closed before completion.");
-          },
-        });
-      } else if (data.redirect_url) {
-        window.location.href = data.redirect_url;
-      } else {
-        throw new Error("Midtrans Snap client library not loaded.");
-      }
+      setQrisData(data);
+      setShowQrisModal(true);
     } catch (err: any) {
       console.error(err);
       setNotice(err.message || "An error occurred during payment processing.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCheckPayment = async () => {
+    if (!qrisData) return;
+    setCheckingPayment(true);
+    try {
+      const res = await fetch(`/api/qrisly/status?id=${qrisData.history_id}&order_id=${qrisData.order_id}`);
+      if (!res.ok) throw new Error("Failed to verify status");
+      
+      const data = await res.json();
+      if (data.success) {
+        setNotice("Payment successful! Reloading page...");
+        setShowQrisModal(false);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      } else {
+        alert("Payment not detected yet. Please ensure you have scanned and completed the payment.");
+      }
+    } catch (err) {
+      console.error("Status check failed:", err);
+      alert("Failed to verify payment. Please try again.");
+    } finally {
+      setCheckingPayment(false);
     }
   };
 
@@ -151,13 +157,6 @@ export default function BillingPanel({
 
   return (
     <>
-      {/* Load Midtrans Snap client libraries */}
-      <Script
-        src={midtransSnapUrl}
-        data-client-key={midtransClientKey}
-        strategy="lazyOnload"
-      />
-
       {/* Sub content page */}
       <div className="px-4 py-6 md:px-8 md:py-8">
             {notice ? (
@@ -523,7 +522,7 @@ export default function BillingPanel({
                       <p>
                         Expired date:<br />
                         <span className="font-semibold text-[var(--charcoal)]">{endedAt}</span><br />
-                        via Midtrans gateway.
+                        via QRISly gateway.
                       </p>
                     )}
                   </div>
@@ -534,7 +533,7 @@ export default function BillingPanel({
                   <div className="flex items-start gap-2.5 text-xs text-[#5f6673] leading-5">
                     <Info size={16} className="text-[var(--green)] shrink-0 mt-0.5" />
                     <p>
-                      Payments are processed securely via Midtrans. Once purchased, plans are non-refundable.
+                      Payments are processed securely via QRISly. Once purchased, plans are non-refundable.
                     </p>
                   </div>
                 </div>
@@ -562,6 +561,85 @@ export default function BillingPanel({
               </aside>
             </div>
           </div>
+
+          {/* QRIS Payment Modal */}
+          {showQrisModal && qrisData && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fade-in">
+              <div className="relative w-full max-w-md overflow-hidden rounded-[2.25rem] border border-[#e4dbce] bg-[#fffdf8] p-6 shadow-2xl transition-all duration-300">
+                {/* Modal Header */}
+                <div className="text-center mt-2">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--green-soft)] text-[var(--green)] mb-3">
+                    <QrCode size={24} />
+                  </div>
+                  <h3 className="text-xl font-bold text-[var(--charcoal)] tracking-tight">QRIS Payment</h3>
+                  <p className="text-xs text-[#666a61] mt-1.5 px-4">
+                    Scan the QR code below using GoPay, OVO, ShopeePay, Dana, or your Mobile Banking application to pay.
+                  </p>
+                </div>
+
+                {/* QR Code */}
+                <div className="mx-auto my-6 flex flex-col items-center justify-center p-4 rounded-3xl bg-white border border-[#e4dbce] max-w-[240px] shadow-xs animate-scale-up">
+                  <img
+                    src={qrisData.qr_url}
+                    alt="QRIS Code"
+                    className="w-full aspect-square object-contain rounded-xl"
+                  />
+                  <div className="mt-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                    Dynamic QRIS
+                  </div>
+                </div>
+
+                {/* Details */}
+                <div className="rounded-2xl border border-[#e4dbce] bg-white p-4 space-y-2.5 text-xs text-[#555950]">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#777a72]">Plan Selected:</span>
+                    <span className="font-semibold text-[var(--charcoal)]">
+                      {selectedPlan === "monthly" ? "Monthly Plan" : "Yearly Plan"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[#777a72]">Amount:</span>
+                    <span className="font-bold text-[var(--green-dark)] text-sm">
+                      {new Intl.NumberFormat("id-ID", {
+                        style: "currency",
+                        currency: "IDR",
+                        minimumFractionDigits: 0,
+                      }).format(qrisData.amount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-[#ece4d8] pt-2.5">
+                    <span className="text-[#777a72]">Invoice No:</span>
+                    <span className="font-mono text-[10px] text-[#4d5149]">{qrisData.order_id}</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="mt-6 space-y-2.5">
+                  <button
+                    onClick={handleCheckPayment}
+                    disabled={checkingPayment}
+                    className="w-full flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-[var(--green)] text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[var(--green-dark)] shadow-[0_12px_24px_rgba(66,107,79,0.18)] disabled:opacity-50 cursor-pointer"
+                  >
+                    {checkingPayment ? (
+                      <span className="flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        Verifying...
+                      </span>
+                    ) : (
+                      "I Have Paid (Saya Sudah Bayar)"
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowQrisModal(false)}
+                    disabled={checkingPayment}
+                    className="w-full flex min-h-12 items-center justify-center rounded-2xl border border-[#d9d0c2] bg-white text-sm font-semibold text-[#4d5149] transition hover:bg-[#fbf7ef] disabled:opacity-50 cursor-pointer"
+                  >
+                    Cancel / Pay Later
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
   );
 }
